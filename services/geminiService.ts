@@ -1,5 +1,5 @@
 import { GoogleGenAI, Modality } from "@google/genai";
-import { IMAGE_EDIT_MODEL, VIDEO_GEN_MODEL } from '../constants';
+import { IMAGE_EDIT_MODEL, VIDEO_GEN_MODEL, TEXT_MODEL } from '../constants';
 import { ExpressionIntensity, ExpressiveImageResponse, VideoOrientation, VoiceStyle } from "../types";
 
 if (!process.env.API_KEY) {
@@ -7,6 +7,20 @@ if (!process.env.API_KEY) {
 }
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+
+export const enhanceScriptWithAI = async (currentScript: string): Promise<string> => {
+    const prompt = `You are an expert copywriter specializing in video scripts. Rewrite the following text to be more engaging, clear, and concise for a talking head video. Maintain the original meaning but improve the flow and impact. Return only the revised script text, without any additional explanations or preamble. Original script: "${currentScript}"`;
+    try {
+        const response = await ai.models.generateContent({
+            model: TEXT_MODEL,
+            contents: prompt,
+        });
+        return response.text.trim();
+    } catch(error) {
+        console.error("Error enhancing script:", error);
+        throw new Error("Failed to enhance script with AI. Please try again.");
+    }
+};
 
 const getExpressionPromptText = (intensity: ExpressionIntensity): string => {
     switch (intensity) {
@@ -80,12 +94,12 @@ export const startVideoGeneration = async (
     base64ImageData: string,
     mimeType: string,
     script: string,
-    voiceStyle: VoiceStyle,
+    voicePrompt: string,
 ): Promise<any> => {
     try {
         const operation = await ai.models.generateVideos({
             model: VIDEO_GEN_MODEL,
-            prompt: `Using a standard ${voiceStyle.toLowerCase()} voice, please narrate the following script: "${script}"`,
+            prompt: `Narrate the following script in ${voicePrompt}: "${script}"`,
             image: {
                 imageBytes: base64ImageData,
                 mimeType: mimeType,

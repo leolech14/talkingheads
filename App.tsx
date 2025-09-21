@@ -3,19 +3,21 @@ import { ImageUploader } from './components/ImageUploader';
 import { ControlPanel } from './components/ControlPanel';
 import { VideoPlayer } from './components/VideoPlayer';
 import { Loader } from './components/Loader';
-import { generateExpressiveImage, startVideoGeneration, checkVideoGenerationStatus } from './services/geminiService';
+import { generateExpressiveImage, startVideoGeneration, checkVideoGenerationStatus, enhanceScriptWithAI } from './services/geminiService';
 import { ExpressionIntensity, VoiceStyle, VideoOrientation } from './types';
 import { Header } from './components/Header';
 import { ErrorDisplay } from './components/ErrorDisplay';
+import { VOICES } from './constants';
 
 const App: React.FC = () => {
     const [uploadedImage, setUploadedImage] = useState<string | null>(null);
     const [imageMimeType, setImageMimeType] = useState<string | null>(null);
     const [script, setScript] = useState<string>("Welcome to the future of video creation! With just a single image and a script, you can generate a lifelike talking head video, complete with natural expressions and perfectly synced audio.");
-    const [voiceStyle, setVoiceStyle] = useState<VoiceStyle>(VoiceStyle.FEMALE);
+    const [voiceStyle, setVoiceStyle] = useState<string>(VOICES[0]?.name ?? '');
     const [expressionIntensity, setExpressionIntensity] = useState<ExpressionIntensity>(ExpressionIntensity.EXPRESSIVE);
     const [videoOrientation, setVideoOrientation] = useState<VideoOrientation>(VideoOrientation.LANDSCAPE);
     const [isLoading, setIsLoading] = useState<boolean>(false);
+    const [isEnhancingScript, setIsEnhancingScript] = useState<boolean>(false);
     const [loadingMessage, setLoadingMessage] = useState<string>('');
     const [generatedVideoUrl, setGeneratedVideoUrl] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -23,10 +25,25 @@ const App: React.FC = () => {
     const handleImageUpload = (file: File) => {
         const reader = new FileReader();
         reader.onloadend = () => {
-            setUploadedImage(reader.result as string);
+            const imageSrc = reader.result as string;
+            setUploadedImage(imageSrc);
             setImageMimeType(file.type);
             setGeneratedVideoUrl(null);
             setError(null);
+
+            // Automatically detect image orientation
+            const img = new Image();
+            img.onload = () => {
+                const aspectRatio = img.naturalWidth / img.naturalHeight;
+                if (aspectRatio > 1.2) {
+                    setVideoOrientation(VideoOrientation.LANDSCAPE);
+                } else if (aspectRatio < 0.85) {
+                    setVideoOrientation(VideoOrientation.PORTRAIT);
+                } else {
+                    setVideoOrientation(VideoOrientation.SQUARE);
+                }
+            };
+            img.src = imageSrc;
         };
         reader.onerror = () => {
             setError("Failed to read the image file.");
@@ -49,6 +66,24 @@ const App: React.FC = () => {
         return currentOperation;
     }, []);
 
+    const handleEnhanceScript = useCallback(async () => {
+        if (!script) {
+            setError("Please enter a script to enhance.");
+            return;
+        }
+        setIsEnhancingScript(true);
+        setError(null);
+        try {
+            const enhancedScript = await enhanceScriptWithAI(script);
+            setScript(enhancedScript);
+        } catch (err: any) {
+            console.error(err);
+            setError(err.message || "Failed to enhance the script.");
+        } finally {
+            setIsEnhancingScript(false);
+        }
+    }, [script]);
+
     const handleGenerateVideo = useCallback(async () => {
         if (!uploadedImage || !imageMimeType || !script) {
             setError("Please upload an image and provide a script before generating a video.");
@@ -67,7 +102,13 @@ const App: React.FC = () => {
             
             // Step 2: Start video generation with the new image
             setLoadingMessage('Initializing video generation...');
-            const videoOperation = await startVideoGeneration(expressiveImageResponse.base64, expressiveImageResponse.mimeType, script, voiceStyle);
+            const selectedVoiceConfig = VOICES.find(v => v.name === voiceStyle);
+            if (!selectedVoiceConfig) {
+                throw new Error(`Voice style "${voiceStyle}" not found in configuration.`);
+            }
+            const finalVoicePrompt = selectedVoiceConfig.promptDescriptor;
+
+            const videoOperation = await startVideoGeneration(expressiveImageResponse.base64, expressiveImageResponse.mimeType, script, finalVoicePrompt);
 
             // Step 3: Poll for video completion
             const finalOperation = await pollForVideo(videoOperation);
@@ -116,11 +157,11 @@ const App: React.FC = () => {
                             setVoiceStyle={setVoiceStyle}
                             expressionIntensity={expressionIntensity}
                             setExpressionIntensity={setExpressionIntensity}
-                            videoOrientation={videoOrientation}
-                            setVideoOrientation={setVideoOrientation}
                             onGenerate={handleGenerateVideo}
                             isLoading={isLoading}
                             isReady={!!uploadedImage}
+                            onEnhanceScript={handleEnhanceScript}
+                            isEnhancingScript={isEnhancingScript}
                         />
                     </div>
                     <div className="bg-gray-800 rounded-2xl shadow-lg p-6 flex items-center justify-center min-h-[400px] lg:min-h-0">

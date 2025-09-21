@@ -3,6 +3,13 @@ export enum VoiceStyle {
     FEMALE = 'Female',
 }
 
+export interface VoiceOption {
+    name: string;
+    displayName: string;
+    gender: VoiceStyle;
+    promptDescriptor: string;
+}
+
 export enum ExpressionIntensity {
     NEUTRAL = 'Neutral',
     EXPRESSIVE = 'Expressive',
