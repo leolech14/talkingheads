@@ -48,6 +48,20 @@ const getOrientationPromptText = (orientation: VideoOrientation): string => {
     }
 }
 
+const getAspectRatioValue = (orientation: VideoOrientation): '16:9' | '9:16' | '1:1' => {
+    switch (orientation) {
+        case VideoOrientation.LANDSCAPE:
+            return '16:9';
+        case VideoOrientation.PORTRAIT:
+            return '9:16';
+        case VideoOrientation.SQUARE:
+            return '1:1';
+        default:
+            return '16:9'; // Safe default
+    }
+};
+
+
 export const generateExpressiveImage = async (
     base64ImageData: string,
     mimeType: string,
@@ -98,8 +112,10 @@ export const startVideoGeneration = async (
     mimeType: string,
     script: string,
     voicePrompt: string,
+    orientation: VideoOrientation,
 ): Promise<any> => {
     try {
+        const aspectRatio = getAspectRatioValue(orientation);
         const operation = await ai.models.generateVideos({
             model: VIDEO_GEN_MODEL,
             prompt: `Narrate the following script in ${voicePrompt}: "${script}"`,
@@ -109,6 +125,7 @@ export const startVideoGeneration = async (
             },
             config: {
                 numberOfVideos: 1,
+                aspectRatio: aspectRatio,
             }
         });
         return operation;

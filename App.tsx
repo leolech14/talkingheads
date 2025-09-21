@@ -5,7 +5,7 @@ import { VideoPlayer } from './components/VideoPlayer';
 import { Loader } from './components/Loader';
 import { generateExpressiveImage, startVideoGeneration, checkVideoGenerationStatus, enhanceScriptWithAI, downloadVideo } from './services/geminiService';
 import * as dbService from './services/dbService';
-import { ExpressionIntensity, VideoOrientation, VideoHistoryItem, PipelineStage } from './types';
+import { ExpressionIntensity, VideoOrientation, VideoHistoryItem, PipelineStage, ExpressiveImageResponse } from './types';
 import { Header } from './components/Header';
 import { ErrorDisplay } from './components/ErrorDisplay';
 import { VOICES } from './constants';
@@ -59,6 +59,8 @@ const App: React.FC = () => {
     const [videoOrientation, setVideoOrientation] = useState<VideoOrientation>(VideoOrientation.LANDSCAPE);
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [isEnhancingScript, setIsEnhancingScript] = useState<boolean>(false);
+    const [isGeneratingPreview, setIsGeneratingPreview] = useState<boolean>(false);
+    const [expressionPreview, setExpressionPreview] = useState<{ base64: string; mimeType: string; dataUrl: string; } | null>(null);
     const [currentStage, setCurrentStage] = useState<PipelineStage>('');
     const [activeVideoUrl, setActiveVideoUrl] = useState<string | null>(null);
     const [videoHistory, setVideoHistory] = useState<VideoHistoryItem[]>([]);
@@ -102,6 +104,7 @@ const App: React.FC = () => {
             setUploadedImage(imageSrc);
             setImageMimeType(file.type);
             setActiveVideoUrl(null); // Deselect active video, but don't clear persistent history
+            setExpressionPreview(null); // Reset expression preview on new image upload
             setError(null);
 
             const img = new Image();
@@ -151,6 +154,36 @@ const App: React.FC = () => {
             setIsEnhancingScript(false);
         }
     }, [script]);
+    
+    const handleGeneratePreview = useCallback(async () => {
+        if (!uploadedImage || !imageMimeType || !script) {
+            setError("Please upload an image and provide a script before generating a preview.");
+            return;
+        }
+
+        setIsGeneratingPreview(true);
+        setError(null);
+        try {
+            const base64OnlyImage = uploadedImage.split(',')[1];
+            const expressiveImageResponse = await generateExpressiveImage(base64OnlyImage, imageMimeType, script, expressionIntensity, videoOrientation);
+            
+            setExpressionPreview({
+                ...expressiveImageResponse,
+                dataUrl: `data:${expressiveImageResponse.mimeType};base64,${expressiveImageResponse.base64}`
+            });
+
+        } catch (err: any) {
+            console.error(err);
+            setError(err.message || "Failed to generate expression preview.");
+        } finally {
+            setIsGeneratingPreview(false);
+        }
+    }, [uploadedImage, imageMimeType, script, expressionIntensity, videoOrientation]);
+
+    const handleRevertPreview = useCallback(() => {
+        setExpressionPreview(null);
+    }, []);
+
 
     const handleGenerateVideo = useCallback(async () => {
         if (!uploadedImage || !imageMimeType || !script) {
@@ -164,9 +197,20 @@ const App: React.FC = () => {
 
         let generatedVideoUrl: string | null = null;
         try {
-            setCurrentStage('GENERATING_IMAGE');
-            const base64OnlyImage = uploadedImage.split(',')[1];
-            const expressiveImageResponse = await generateExpressiveImage(base64OnlyImage, imageMimeType, script, expressionIntensity, videoOrientation);
+            let imageToProcess: ExpressiveImageResponse;
+
+            if (expressionPreview) {
+                // Use the already generated preview to save an API call
+                imageToProcess = {
+                    base64: expressionPreview.base64,
+                    mimeType: expressionPreview.mimeType,
+                };
+            } else {
+                // Generate a new expressive image as part of the main flow
+                setCurrentStage('GENERATING_IMAGE');
+                const base64OnlyImage = uploadedImage.split(',')[1];
+                imageToProcess = await generateExpressiveImage(base64OnlyImage, imageMimeType, script, expressionIntensity, videoOrientation);
+            }
             
             setCurrentStage('STARTING_VIDEO');
             const selectedVoiceConfig = VOICES.find(v => v.name === voiceStyle);
@@ -175,7 +219,7 @@ const App: React.FC = () => {
             }
             const finalVoicePrompt = selectedVoiceConfig.promptDescriptor;
 
-            const videoOperation = await startVideoGeneration(expressiveImageResponse.base64, expressiveImageResponse.mimeType, script, finalVoicePrompt);
+            const videoOperation = await startVideoGeneration(imageToProcess.base64, imageToProcess.mimeType, script, finalVoicePrompt, videoOrientation);
 
             const finalOperation = await pollForVideo(videoOperation);
             
@@ -223,7 +267,7 @@ const App: React.FC = () => {
             setIsLoading(false);
             setCurrentStage('');
         }
-    }, [uploadedImage, imageMimeType, script, expressionIntensity, pollForVideo, voiceStyle, videoOrientation]);
+    }, [uploadedImage, imageMimeType, script, expressionIntensity, pollForVideo, voiceStyle, videoOrientation, expressionPreview]);
 
     const handleDeleteVideo = useCallback(async (id: string) => {
         try {
@@ -258,11 +302,20 @@ const App: React.FC = () => {
 
     return (
         <div className="min-h-screen bg-gray-900 text-gray-200 font-sans p-4 sm:p-6 lg:p-8">
-            <div className="max-w-7xl mx-auto">
+            <div className="max-w-screen-2xl mx-auto">
                 <Header />
-                <main className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-8">
-                    <div className="flex flex-col gap-8">
-                        <ImageUploader onImageUpload={handleImageUpload} uploadedImagePreview={uploadedImage} />
+                <main className="mt-8 grid grid-cols-1 lg:grid-cols-7 gap-8">
+                    {/* --- Column 1: Image Uploader --- */}
+                    <div className="lg:col-span-2">
+                        <ImageUploader 
+                            onImageUpload={handleImageUpload} 
+                            uploadedImagePreview={uploadedImage}
+                            expressionPreviewImage={expressionPreview?.dataUrl ?? null}
+                            onRevertPreview={handleRevertPreview}
+                         />
+                    </div>
+                    {/* --- Column 2: Control Panel --- */}
+                    <div className="lg:col-span-2">
                         <ControlPanel
                             script={script}
                             setScript={setScript}
@@ -270,15 +323,20 @@ const App: React.FC = () => {
                             setVoiceStyle={setVoiceStyle}
                             expressionIntensity={expressionIntensity}
                             setExpressionIntensity={setExpressionIntensity}
+                            videoOrientation={videoOrientation}
+                            setVideoOrientation={setVideoOrientation}
                             onGenerate={handleGenerateVideo}
                             isLoading={isLoading}
                             isReady={!!uploadedImage}
                             onEnhanceScript={handleEnhanceScript}
                             isEnhancingScript={isEnhancingScript}
+                            onGeneratePreview={handleGeneratePreview}
+                            isGeneratingPreview={isGeneratingPreview}
                         />
                     </div>
-                    <div className="flex flex-col gap-8">
-                        <div className="bg-gray-800 rounded-2xl shadow-lg p-6 flex items-center justify-center min-h-[400px] lg:min-h-0">
+                    {/* --- Column 3: Video Output & History --- */}
+                    <div className="lg:col-span-3 flex flex-col gap-8">
+                        <div className="bg-gray-800 rounded-2xl shadow-lg p-6 flex items-center justify-center flex-grow min-h-[60vh]">
                             {isLoading ? (
                                 <Loader currentStage={currentStage} />
                             ) : error ? (
