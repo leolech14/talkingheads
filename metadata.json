@@ -1,0 +1,5 @@
+{
+  "name": "AI Talking Head Video Generator",
+  "description": "Generate perfect lip-sync talking videos from a single image and a script. This app uses AI to create natural gestures and expressions, making it easy to produce engaging video content without being on camera.",
+  "requestFramePermissions": []
+}
