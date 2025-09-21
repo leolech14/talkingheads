@@ -1,6 +1,6 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 import { IMAGE_EDIT_MODEL, VIDEO_GEN_MODEL, TEXT_MODEL } from '../constants';
-import { ExpressionIntensity, ExpressiveImageResponse, VideoOrientation, VoiceStyle } from "../types";
+import { ExpressionIntensity, ExpressiveImageResponse, VideoOrientation } from "../types";
 
 if (!process.env.API_KEY) {
     console.error("API_KEY environment variable not set. Please set it to use the Gemini API.");
@@ -18,7 +18,7 @@ export const enhanceScriptWithAI = async (currentScript: string): Promise<string
         return response.text.trim();
     } catch(error) {
         console.error("Error enhancing script:", error);
-        throw new Error("Failed to enhance script with AI. Please try again.");
+        throw new Error("Failed to enhance script with AI. The service might be temporarily unavailable. Please try again.");
     }
 };
 
@@ -81,11 +81,14 @@ export const generateExpressiveImage = async (
                 mimeType: imagePart.inlineData.mimeType,
             };
         } else {
-            throw new Error("AI did not return an expressive image. Please try again.");
+            throw new Error("The AI did not return an image. This could be due to safety filters. Suggestion: Try a different script or image.");
         }
-    } catch (error) {
+    } catch (error: any) {
         console.error("Error generating expressive image:", error);
-        throw new Error("Failed to generate expressive image from AI.");
+        if (error.message.includes("Suggestion:")) {
+            throw error;
+        }
+        throw new Error("Failed to generate the expressive image. The AI service may be temporarily down. Suggestion: Please wait a moment and try again.");
     }
 };
 
@@ -111,7 +114,7 @@ export const startVideoGeneration = async (
         return operation;
     } catch (error) {
         console.error("Error starting video generation:", error);
-        throw new Error("Failed to start video generation.");
+        throw new Error("Could not start the video generation process. The service might be busy or unavailable. Suggestion: Please wait a moment and try again.");
     }
 };
 
@@ -122,6 +125,24 @@ export const checkVideoGenerationStatus = async (operation: any): Promise<any> =
         return status;
     } catch (error) {
         console.error("Error checking video generation status:", error);
-        throw new Error("Failed to check video generation status.");
+        throw new Error("Lost connection while checking video status. Suggestion: Please check your internet connection. You may need to restart the generation.");
     }
 };
+
+export const downloadVideo = async (downloadLink: string): Promise<Blob> => {
+    if (!process.env.API_KEY) {
+        console.error("API_KEY is not set in the environment.");
+        throw new Error("Application is not configured correctly (missing API key).");
+    }
+
+    try {
+        const response = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
+        if (!response.ok) {
+            throw new Error(`Download failed with status: ${response.statusText}`);
+        }
+        return await response.blob();
+    } catch (error) {
+        console.error("Error downloading video:", error);
+        throw new Error("The video was generated, but the download failed. This might be a temporary network issue. Suggestion: Check your internet connection and try generating again.");
+    }
+}

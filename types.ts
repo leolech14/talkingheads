@@ -26,3 +26,19 @@ export interface ExpressiveImageResponse {
     base64: string;
     mimeType: string;
 }
+
+export interface VideoHistoryItem {
+    id: string;
+    videoUrl: string;
+    thumbnailUrl: string;
+    script: string;
+    timestamp: Date;
+}
+
+export type PipelineStage =
+    | 'GENERATING_IMAGE'
+    | 'STARTING_VIDEO'
+    | 'RENDERING_VIDEO'
+    | 'DOWNLOADING_VIDEO'
+    | 'CREATING_THUMBNAIL'
+    | '';

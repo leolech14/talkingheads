@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ExpressionIntensity, VoiceStyle, VideoOrientation, VoiceOption } from '../types';
+import { ExpressionIntensity, VoiceOption } from '../types';
 import { VOICES } from '../constants';
 
 interface ControlPanelProps {
@@ -29,6 +29,12 @@ const Select: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = (props) 
 const PlayIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" /></svg>;
 const StopIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1zm4 0a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" /></svg>;
 
+const InfoIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+    </svg>
+);
+
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
     script,
@@ -43,67 +49,68 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
     onEnhanceScript,
     isEnhancingScript,
 }) => {
-    const [auditioningVoiceName, setAuditioningVoiceName] = useState<string | null>(null);
+    const [systemVoices, setSystemVoices] = useState<SpeechSynthesisVoice[]>([]);
+    const [speakingVoiceName, setSpeakingVoiceName] = useState<string | null>(null);
 
     useEffect(() => {
-        const stopSpeech = () => {
-            if (speechSynthesis.speaking) {
-                speechSynthesis.cancel();
+        const loadVoices = () => {
+            const voices = window.speechSynthesis.getVoices();
+            if (voices.length > 0) {
+                setSystemVoices(voices);
             }
         };
+        // Voices load asynchronously.
+        loadVoices();
+        window.speechSynthesis.onvoiceschanged = loadVoices;
 
-        // Ensure voices are loaded before interacting
-        const ensureVoices = (callback: () => void) => {
-            if (speechSynthesis.getVoices().length > 0) {
-                callback();
-            } else {
-                speechSynthesis.onvoiceschanged = callback;
-            }
-        };
-        
-        ensureVoices(() => {}); // Pre-load voices
-
+        // Cleanup on unmount
         return () => {
-            speechSynthesis.onvoiceschanged = null;
-            stopSpeech();
+            window.speechSynthesis.onvoiceschanged = null;
+            window.speechSynthesis.cancel();
         };
     }, []);
 
     const handleAudition = (voice: VoiceOption) => {
-        if (!script || !isReady) return;
+        const { name: voiceName, displayName } = voice;
+        const isCurrentlySpeaking = speakingVoiceName === voiceName;
         
-        if (speechSynthesis.speaking) {
-            speechSynthesis.cancel();
-            // If the user clicks the same voice again, treat it as a stop action.
-            if (auditioningVoiceName === voice.name) {
-                setAuditioningVoiceName(null);
-                return;
-            }
-        }
+        // Always stop any current speech first.
+        window.speechSynthesis.cancel();
 
-        const allBrowserVoices = speechSynthesis.getVoices();
-        let voiceToUse = allBrowserVoices.find(v => v.name === voice.name);
-        
-        if (!voiceToUse) {
-            voiceToUse = allBrowserVoices.find(v => {
-                const voiceName = v.name.toLowerCase();
-                const genderMatch = (voice.gender === VoiceStyle.FEMALE && voiceName.includes('female')) ||
-                                    (voice.gender === VoiceStyle.MALE && (voiceName.includes('male') || voiceName.includes('david')));
-                return genderMatch && v.lang.startsWith('en');
-            });
-        }
-
-        if (!voiceToUse) {
-            alert(`Could not find a suitable voice in your browser to preview '${voice.displayName}'. The final video will still use the selected voice style.`);
+        // If the clicked voice was the one speaking, we just stop it.
+        if (isCurrentlySpeaking) {
+            setSpeakingVoiceName(null);
             return;
         }
 
-        const utterance = new SpeechSynthesisUtterance(script);
-        utterance.voice = voiceToUse;
-        utterance.onstart = () => setAuditioningVoiceName(voice.name);
-        utterance.onend = () => setAuditioningVoiceName(null);
-        utterance.onerror = () => setAuditioningVoiceName(null);
-        speechSynthesis.speak(utterance);
+        // Otherwise, we start a new speech.
+        const textToSpeak = (script.split(/[.!?]/)[0] || "Hello, this is a voice preview.").trim();
+        if (!textToSpeak) return;
+
+        const utterance = new SpeechSynthesisUtterance(textToSpeak);
+        const systemVoice = systemVoices.find(v => v.name === voiceName);
+
+        if (!systemVoice) {
+            alert(`A preview voice for "${displayName}" is not available on your browser. The final video will still be generated with the correct high-quality voice.`);
+            return;
+        }
+
+        utterance.voice = systemVoice;
+
+        utterance.onstart = () => {
+            setSpeakingVoiceName(voiceName);
+        };
+
+        utterance.onend = () => {
+            setSpeakingVoiceName(null);
+        };
+        
+        utterance.onerror = (event) => {
+            console.error('SpeechSynthesis Error:', event.error);
+            setSpeakingVoiceName(null);
+        };
+
+        window.speechSynthesis.speak(utterance);
     };
 
     const isBusy = isLoading || isEnhancingScript;
@@ -157,33 +164,44 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             </div>
 
             <div>
-                <Label>Voice Style</Label>
-                <p className="text-xs text-gray-400 mb-3">Audio previews use browser voices for pacing. The final video will use a high-quality Google AI voice.</p>
-                <div className="space-y-2">
-                    {VOICES.map((voice) => (
-                        <div key={voice.name} className="flex items-center justify-between bg-gray-700/50 p-2 rounded-md">
-                            <label htmlFor={`voice-${voice.name}`} className="flex items-center gap-3 cursor-pointer">
-                                <input
-                                    type="radio"
-                                    id={`voice-${voice.name}`}
-                                    name="voice-style"
-                                    value={voice.name}
-                                    checked={voiceStyle === voice.name}
-                                    onChange={(e) => setVoiceStyle(e.target.value)}
-                                    className="form-radio h-4 w-4 text-cyan-500 bg-gray-800 border-gray-600 focus:ring-cyan-600"
-                                />
-                                <span className="text-gray-200">{voice.displayName}</span>
-                            </label>
-                             <button 
-                                onClick={() => handleAudition(voice)} 
-                                title={auditioningVoiceName === voice.name ? "Stop Audition" : "Audition Voice"} 
-                                disabled={!isReady} 
-                                className={`p-2 rounded-full transition-colors ${auditioningVoiceName === voice.name ? 'bg-red-600 hover:bg-red-500' : 'bg-teal-600 hover:bg-teal-500'} text-white disabled:bg-gray-600 disabled:cursor-not-allowed`}
-                            >
-                                {auditioningVoiceName === voice.name ? <StopIcon /> : <PlayIcon />}
-                            </button>
+                 <div className="flex items-center gap-2 mb-3">
+                    <Label>Voice Style</Label>
+                    <div className="group relative flex items-center">
+                        <InfoIcon />
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-2 bg-gray-900 text-white text-xs text-center rounded-md opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
+                            Audition uses your browser's text-to-speech. The final video will feature a higher-quality AI-generated voice.
+                            <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-x-4 border-x-transparent border-t-4 border-t-gray-900"></div>
                         </div>
-                    ))}
+                    </div>
+                </div>
+                <div className="space-y-2">
+                    {VOICES.map((voice) => {
+                        const isPlaying = speakingVoiceName === voice.name;
+                        return (
+                            <div key={voice.name} className="flex items-center justify-between bg-gray-700/50 p-2 rounded-md">
+                                <label htmlFor={`voice-${voice.name}`} className="flex items-center gap-3 cursor-pointer w-full">
+                                    <input
+                                        type="radio"
+                                        id={`voice-${voice.name}`}
+                                        name="voice-style"
+                                        value={voice.name}
+                                        checked={voiceStyle === voice.name}
+                                        onChange={(e) => setVoiceStyle(e.target.value)}
+                                        className="form-radio h-4 w-4 text-cyan-500 bg-gray-800 border-gray-600 focus:ring-cyan-600"
+                                    />
+                                    <span className="text-gray-200">{voice.displayName}</span>
+                                </label>
+                                 <button 
+                                    onClick={() => handleAudition(voice)} 
+                                    title={isPlaying ? "Stop Audition" : "Audition Voice Sample"} 
+                                    className={`p-2 rounded-full transition-colors ${isPlaying ? 'bg-red-600 hover:bg-red-500' : 'bg-teal-600 hover:bg-teal-500'} text-white`}
+                                    disabled={systemVoices.length === 0}
+                                >
+                                    {isPlaying ? <StopIcon /> : <PlayIcon />}
+                                </button>
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
 
