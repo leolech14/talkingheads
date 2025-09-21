@@ -108,9 +108,13 @@ const fetchGoogleTTSAudio = async (text: string, voiceName: string): Promise<{ b
         const durationSec = await getAudioDuration(blob);
 
         return { blob, durationSec };
-    } catch (error) {
+    } catch (error: any) {
         console.error("Error fetching or processing TTS audio:", error);
-        throw error;
+        if (error instanceof TypeError) { // This often indicates a network error
+            throw new Error("Audio generation failed: Could not connect to the text-to-speech service. Please check your network connection.");
+        }
+        // Re-throw errors from the API response or other issues, ensuring a consistent message format.
+        throw new Error(`Audio generation failed: ${error.message}`);
     }
 };
 
@@ -171,7 +175,8 @@ export const analyzeAudioTimings = async (totalSec: number, script: string): Pro
         return { totalSec: 0, segments: [] };
     }
 
-    const sentences = script.match(/[^.!?]+[.!?\n]+/g) || [script];
+    // Improved regex to handle the last sentence if it lacks punctuation
+    const sentences = script.match(/[^.!?\n]+(?:[.!?\n]|$)+/g) || [script];
     const totalChars = sentences.reduce((sum, s) => sum + s.trim().length, 0);
 
     if (totalChars === 0) {
@@ -188,8 +193,25 @@ export const analyzeAudioTimings = async (totalSec: number, script: string): Pro
         const duration = (text.length / totalChars) * totalSec;
         const startSec = currentTime;
         const endSec = startSec + duration;
-        // Place the gesture peak around 65% of the way through the segment for a natural feel.
-        const peakSec = startSec + (duration * 0.65);
+        
+        // A more sophisticated heuristic for peak emphasis time
+        const words = text.split(/\s+/).filter(Boolean).length;
+        let peakPercentage: number;
+
+        if (words <= 3) {
+            peakPercentage = 0.50; // Middle for very short phrases
+        } else if (words <= 8) {
+            peakPercentage = 0.60; // Slightly after middle for medium phrases
+        } else {
+            peakPercentage = 0.70; // Later for longer sentences
+        }
+
+        // Adjust for punctuation, pushing emphasis towards the end for questions/exclamations
+        if (text.endsWith('?') || text.endsWith('!')) {
+            peakPercentage = Math.min(0.85, peakPercentage + 0.15);
+        }
+
+        const peakSec = startSec + (duration * peakPercentage);
 
         segments.push({
             id: index,

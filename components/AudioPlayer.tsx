@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 
 interface AudioPlayerProps {
     audioUrl: string;
@@ -17,7 +17,97 @@ const MusicNoteIcon = () => (
 );
 
 
+/**
+ * Decodes audio data and draws a waveform on a canvas.
+ * @param canvas The HTMLCanvasElement to draw on.
+ * @param audioUrl The URL of the audio file to visualize.
+ */
+const drawWaveform = async (canvas: HTMLCanvasElement, audioUrl: string): Promise<void> => {
+    // Use a try/finally block to ensure the AudioContext is closed, preventing resource leaks.
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    try {
+        const response = await fetch(audioUrl);
+        const arrayBuffer = await response.arrayBuffer();
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        const data = audioBuffer.getChannelData(0); // Use the first channel
+
+        // Setup canvas for high-DPI rendering
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.scale(dpr, dpr);
+
+        const width = canvas.clientWidth;
+        const height = canvas.clientHeight;
+        const middleY = height / 2;
+
+        // Clear canvas and set styles
+        ctx.clearRect(0, 0, width, height);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#525252'; // tailwind neutral-600
+        ctx.beginPath();
+        
+        const samples = Math.floor(width);
+        const step = Math.ceil(data.length / samples);
+
+        // Loop through samples, find min/max for each segment, and draw a vertical line
+        for (let i = 0; i < samples; i++) {
+            let min = 1.0;
+            let max = -1.0;
+            
+            const startIndex = i * step;
+            const endIndex = Math.min(startIndex + step, data.length);
+
+            for (let j = startIndex; j < endIndex; j++) {
+                const datum = data[j];
+                if (datum < min) min = datum;
+                if (datum > max) max = datum;
+            }
+            
+            const x = i + 0.5; // Draw in the center of the pixel
+            const yMin = (min * middleY) + middleY;
+            const yMax = (max * middleY) + middleY;
+            
+            ctx.moveTo(x, yMin);
+            ctx.lineTo(x, yMax);
+        }
+        ctx.stroke();
+
+    } catch (error) {
+        console.error("Error drawing waveform:", error);
+    } finally {
+        if (audioContext.state !== 'closed') {
+            await audioContext.close();
+        }
+    }
+};
+
 export const AudioPlayer: React.FC<AudioPlayerProps> = ({ audioUrl }) => {
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (canvas && audioUrl) {
+            let isActive = true;
+            
+            drawWaveform(canvas, audioUrl).catch(err => {
+                // Only log errors if the component is still mounted and the effect is active.
+                if (isActive) {
+                    console.error("Failed to draw waveform:", err);
+                }
+            });
+
+            // Cleanup function to prevent state updates on unmounted components.
+            return () => {
+                isActive = false;
+            };
+        }
+    }, [audioUrl]);
+
+
     return (
         <div className="w-full max-w-md mx-auto flex flex-col items-center gap-6 p-4">
             <div className="text-center">
@@ -25,6 +115,11 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({ audioUrl }) => {
                 <p className="text-lg font-semibold mt-2">Full Audio Track</p>
                 <p className="text-sm text-neutral-500">Review the complete narration before generating the video.</p>
             </div>
+            
+            <div className="w-full h-24 bg-neutral-900 rounded-lg p-2">
+                <canvas ref={canvasRef} className="w-full h-full" />
+            </div>
+
             <audio
                 key={audioUrl}
                 controls

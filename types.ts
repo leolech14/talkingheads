@@ -3,12 +3,24 @@ export enum VoiceStyle {
     FEMALE = 'Female',
 }
 
-export interface VoiceOption {
-    name: string;
+export interface TTSVoiceOption {
+    kind: 'tts';
+    name: string; // e.g., en-US-Studio-O
     displayName: string;
     gender: VoiceStyle;
     promptDescriptor: string;
 }
+
+export interface ClonedVoiceOption {
+    kind: 'cloned';
+    id: string; // crypto.randomUUID()
+    displayName: string;
+    promptDescriptor: string; // User-provided or AI-generated description
+    audioSampleFileName?: string; // If cloned from audio, store filename
+}
+
+export type VoiceOption = TTSVoiceOption | ClonedVoiceOption;
+
 
 export enum VideoOrientation {
     LANDSCAPE = 'Landscape (16:9)',
@@ -28,7 +40,7 @@ export interface GestureInstruction {
 }
 
 export interface VideoHistoryItem {
-    id: string;
+    id:string;
     videoUrl: string;
     thumbnailUrl: string;
     script: string;
@@ -71,6 +83,7 @@ export type PipelineStage =
   | 'AUDIO_FULL' 
   | 'AUDIO_ANALYSIS'
   | 'GESTURE_PLANNING' 
+  | 'GESTURE_EDITING'
   | 'KEYFRAME_GEN'
   | 'VIDEO_START' 
   | 'VIDEO_RENDER' 

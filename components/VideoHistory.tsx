@@ -16,7 +16,7 @@ const DeleteIcon = () => (
 );
 
 
-export const VideoHistory: React.FC<VideoHistoryProps> = ({ history, activeVideoUrl, onSelectVideo, onDeleteVideo, onClearHistory }) => {
+export const VideoHistory: React.FC<VideoHistoryProps> = React.memo(({ history, activeVideoUrl, onSelectVideo, onDeleteVideo, onClearHistory }) => {
     if (history.length === 0) {
         return null;
     }
@@ -60,6 +60,7 @@ export const VideoHistory: React.FC<VideoHistoryProps> = ({ history, activeVideo
                             onClick={(e) => handleDelete(e, item.id)}
                             className="absolute top-1.5 right-1.5 z-10 p-1.5 bg-black/60 text-white rounded-full opacity-0 group-hover:opacity-100 hover:bg-red-900 transition-all"
                             title="Delete this video"
+                            aria-label="Delete this video"
                         >
                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
                         </button>
@@ -84,4 +85,4 @@ export const VideoHistory: React.FC<VideoHistoryProps> = ({ history, activeVideo
             </div>
         </div>
     );
-};
+});

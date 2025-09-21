@@ -1,9 +1,9 @@
 import React, { useRef } from 'react';
-import { ImageAsset, GallerySelection } from '../types';
+import { ImageAsset } from '../types';
+import { usePipeline } from '../contexts/PipelineContext';
 
 interface ImageUploaderProps {
     images: ImageAsset[];
-    selection: GallerySelection;
     onSelect: (id: string) => void;
     onUpload: (file: File) => void;
     onClearAll: () => void;
@@ -16,7 +16,8 @@ const DownloadIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-
 const ClearIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clipRule="evenodd" /></svg>;
 
 
-export const ImageUploader: React.FC<ImageUploaderProps> = ({ images, selection, onSelect, onUpload, onClearAll, onEnlarge }) => {
+export const ImageUploader: React.FC<ImageUploaderProps> = ({ images, onSelect, onUpload, onClearAll, onEnlarge }) => {
+    const { selection } = usePipeline();
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -42,9 +43,9 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({ images, selection,
                 <h2 className="text-lg font-bold text-neutral-200">1. MEDIA GALLERY</h2>
                 {images.length > 0 && (
                     <div className="flex items-center gap-2">
-                         <button onClick={() => selection && onEnlarge(selection.image)} disabled={!selection} title="Full Screen" className="p-2 rounded-full bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed transition"><EnlargeIcon /></button>
-                         <a href={selection?.image.objectUrl} download={`asset-${selection?.imageId}.png`} title="Download Selected" className={`p-2 rounded-full bg-neutral-800 hover:bg-neutral-700 ${!selection ? 'opacity-50 pointer-events-none' : ''}`}><DownloadIcon /></a>
-                         <button onClick={handleClear} title="Clear All Images" className="p-2 rounded-full bg-neutral-800 hover:bg-red-900/50 transition"><ClearIcon /></button>
+                         <button onClick={() => selection && onEnlarge(selection.image)} disabled={!selection} title="Full Screen" aria-label="Enlarge selected image" className="p-2 rounded-full bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed transition"><EnlargeIcon /></button>
+                         <a href={selection?.image.objectUrl} download={`asset-${selection?.imageId}.png`} title="Download Selected" aria-label="Download selected image" className={`p-2 rounded-full bg-neutral-800 hover:bg-neutral-700 ${!selection ? 'opacity-50 pointer-events-none' : ''}`}><DownloadIcon /></a>
+                         <button onClick={handleClear} title="Clear All Images" aria-label="Clear all images" className="p-2 rounded-full bg-neutral-800 hover:bg-red-900/50 transition"><ClearIcon /></button>
                     </div>
                 )}
             </div>
