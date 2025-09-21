@@ -1,4 +1,3 @@
-
 import React from 'react';
 
 interface VideoPlayerProps {
@@ -14,12 +13,12 @@ const DownloadIcon = () => (
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({ videoUrl }) => {
     return (
-        <div className="w-full max-w-2xl mx-auto flex flex-col items-center gap-4">
+        <div className="w-full max-w-3xl mx-auto flex flex-col items-center gap-4 p-4">
             <video
                 key={videoUrl} // Add key to force re-render on new URL
                 controls
                 autoPlay
-                className="rounded-lg shadow-2xl w-full"
+                className="rounded-lg w-full"
             >
                 <source src={videoUrl} type="video/mp4" />
                 Your browser does not support the video tag.
@@ -27,7 +26,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ videoUrl }) => {
              <a
                 href={videoUrl}
                 download={`talking-head-${new Date().getTime()}.mp4`}
-                className="inline-flex items-center justify-center bg-cyan-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-cyan-500 transition-all duration-300 disabled:bg-gray-600 disabled:cursor-not-allowed"
+                className="inline-flex items-center justify-center bg-neutral-800 text-neutral-300 font-bold py-2 px-6 rounded-lg hover:bg-neutral-700 transition-all duration-300"
                 title="Download the generated video"
             >
                 <DownloadIcon />

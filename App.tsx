@@ -3,14 +3,18 @@ import { ImageUploader } from './components/ImageUploader';
 import { ControlPanel } from './components/ControlPanel';
 import { VideoPlayer } from './components/VideoPlayer';
 import { Loader } from './components/Loader';
-import { generateExpressiveImage, startVideoGeneration, checkVideoGenerationStatus, enhanceScriptWithAI, downloadVideo } from './services/geminiService';
+import { startVideoGeneration, checkVideoGenerationStatus, downloadVideo, analyzeScriptForGestures, generateGestureKeyframe } from './services/geminiService';
+import * as audioService from './services/audioService';
 import * as dbService from './services/dbService';
-import { ExpressionIntensity, VideoOrientation, VideoHistoryItem, PipelineStage, ExpressiveImageResponse } from './types';
+import { VideoHistoryItem, PipelineStage, AudioAsset, GestureInstruction, ImageAsset } from './types';
 import { Header } from './components/Header';
 import { ErrorDisplay } from './components/ErrorDisplay';
-import { VOICES } from './constants';
 import { VideoHistory } from './components/VideoHistory';
-
+import { AssetTray } from './components/AssetTray';
+import { useGallery } from './hooks/useGallery';
+import { useAbortableTask } from './hooks/useAbortableTask';
+import { Lightbox } from './components/Lightbox';
+import { AudioPlayer } from './components/AudioPlayer';
 
 /**
  * Generates a thumbnail from a video blob URL.
@@ -37,7 +41,6 @@ const generateVideoThumbnail = (videoUrl: string): Promise<string> => {
             canvas.height = video.videoHeight;
             context.drawImage(video, 0, 0, canvas.width, canvas.height);
             const thumbnailUrl = canvas.toDataURL('image/jpeg', 0.8);
-            // DO NOT revoke the URL here; it's managed by the App component's lifecycle.
             resolve(thumbnailUrl);
         };
 
@@ -51,26 +54,30 @@ const generateVideoThumbnail = (videoUrl: string): Promise<string> => {
 };
 
 const App: React.FC = () => {
-    const [uploadedImage, setUploadedImage] = useState<string | null>(null);
-    const [imageMimeType, setImageMimeType] = useState<string | null>(null);
-    const [script, setScript] = useState<string>("Welcome to the future of video creation! With just a single image and a script, you can generate a lifelike talking head video, complete with natural expressions and perfectly synced audio.");
-    const [voiceStyle, setVoiceStyle] = useState<string>(VOICES[0]?.name ?? '');
-    const [expressionIntensity, setExpressionIntensity] = useState<ExpressionIntensity>(ExpressionIntensity.EXPRESSIVE);
-    const [videoOrientation, setVideoOrientation] = useState<VideoOrientation>(VideoOrientation.LANDSCAPE);
-    const [isLoading, setIsLoading] = useState<boolean>(false);
-    const [isEnhancingScript, setIsEnhancingScript] = useState<boolean>(false);
-    const [isGeneratingPreview, setIsGeneratingPreview] = useState<boolean>(false);
-    const [expressionPreview, setExpressionPreview] = useState<{ base64: string; mimeType: string; dataUrl: string; } | null>(null);
-    const [currentStage, setCurrentStage] = useState<PipelineStage>('');
-    const [activeVideoUrl, setActiveVideoUrl] = useState<string | null>(null);
+    const { images, addUploadedImage, addGeneratedImage, removeAllImages, selection, select } = useGallery();
+    const [lightboxImage, setLightboxImage] = useState<ImageAsset | null>(null);
+
+    // --- State Management ---
+    const [script, setScript] = useState<string>("Welcome to the future of video creation! With this new workflow, we will first generate audio, analyze it for timing, create gestures, and then produce a perfectly synchronized video.");
     const [videoHistory, setVideoHistory] = useState<VideoHistoryItem[]>([]);
+    const [activeVideoUrl, setActiveVideoUrl] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
+    
+    // Pipeline State
+    const [pipelineStage, setPipelineStage] = useState<PipelineStage>('IDLE');
+    const [voicePreviews, setVoicePreviews] = useState<AudioAsset[]>([]);
+    const [selectedVoice, setSelectedVoice] = useState<string | null>(null);
+    const [styleTags, setStyleTags] = useState<string[]>([]);
+    const [fullAudio, setFullAudio] = useState<AudioAsset | null>(null);
+    const [gesturePlan, setGesturePlan] = useState<GestureInstruction[]>([]);
+
+    const videoGenerationTask = useAbortableTask();
 
     // Ref to hold the latest history for cleanup on unmount
     const videoHistoryRef = useRef(videoHistory);
     videoHistoryRef.current = videoHistory;
 
-    // Effect to load history from IndexedDB on initial mount
+    // --- Effects ---
     useEffect(() => {
         const loadHistory = async () => {
             try {
@@ -86,188 +93,177 @@ const App: React.FC = () => {
         loadHistory();
     }, []);
 
-    // Effect for cleaning up all generated blob URLs when the component unmounts
     useEffect(() => {
         return () => {
-            console.log("Unmounting App component, cleaning up video blob URLs...");
             videoHistoryRef.current.forEach(item => {
                 URL.revokeObjectURL(item.videoUrl);
             });
         };
     }, []);
 
+    // Reset pipeline if script or uploaded images change
+    useEffect(() => {
+        setPipelineStage('IDLE');
+        setVoicePreviews([]);
+        setSelectedVoice(null);
+        setStyleTags([]);
+        setFullAudio(null);
+        setGesturePlan([]);
+    }, [script, images]);
 
-    const handleImageUpload = (file: File) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-            const imageSrc = reader.result as string;
-            setUploadedImage(imageSrc);
-            setImageMimeType(file.type);
-            setActiveVideoUrl(null); // Deselect active video, but don't clear persistent history
-            setExpressionPreview(null); // Reset expression preview on new image upload
-            setError(null);
-
-            const img = new Image();
-            img.onload = () => {
-                const aspectRatio = img.naturalWidth / img.naturalHeight;
-                if (aspectRatio > 1.2) {
-                    setVideoOrientation(VideoOrientation.LANDSCAPE);
-                } else if (aspectRatio < 0.85) {
-                    setVideoOrientation(VideoOrientation.PORTRAIT);
-                } else {
-                    setVideoOrientation(VideoOrientation.SQUARE);
-                }
-            };
-            img.src = imageSrc;
-        };
-        reader.onerror = () => {
-            setError("Failed to read the image file.");
-        };
-        reader.readAsDataURL(file);
-    };
-
-    const pollForVideo = useCallback(async (operation: any) => {
-        let currentOperation = operation;
-        while (!currentOperation.done) {
-            setCurrentStage('RENDERING_VIDEO');
-            await new Promise(resolve => setTimeout(resolve, 10000));
-            // No try/catch needed here; errors are propagated up to the main handler
-            currentOperation = await checkVideoGenerationStatus(currentOperation);
-        }
-        return currentOperation;
-    }, []);
-
-    const handleEnhanceScript = useCallback(async () => {
-        if (!script) {
-            setError("Please enter a script to enhance.");
-            return;
-        }
-        setIsEnhancingScript(true);
+    // --- Handlers ---
+    const handleGeneratePreviews = useCallback(async () => {
         setError(null);
+        setPipelineStage('VOICE_PREVIEWS');
         try {
-            const enhancedScript = await enhanceScriptWithAI(script);
-            setScript(enhancedScript);
+            const previews = await audioService.generatePreviewAudios(script);
+            setVoicePreviews(previews);
         } catch (err: any) {
-            console.error(err);
-            setError(err.message || "Failed to enhance the script.");
-        } finally {
-            setIsEnhancingScript(false);
+            setError(err.message || "Failed to generate voice previews.");
+            setPipelineStage('ERROR');
         }
     }, [script]);
-    
-    const handleGeneratePreview = useCallback(async () => {
-        if (!uploadedImage || !imageMimeType || !script) {
-            setError("Please upload an image and provide a script before generating a preview.");
-            return;
-        }
 
-        setIsGeneratingPreview(true);
-        setError(null);
-        try {
-            const base64OnlyImage = uploadedImage.split(',')[1];
-            const expressiveImageResponse = await generateExpressiveImage(base64OnlyImage, imageMimeType, script, expressionIntensity, videoOrientation);
-            
-            setExpressionPreview({
-                ...expressiveImageResponse,
-                dataUrl: `data:${expressiveImageResponse.mimeType};base64,${expressiveImageResponse.base64}`
-            });
-
-        } catch (err: any) {
-            console.error(err);
-            setError(err.message || "Failed to generate expression preview.");
-        } finally {
-            setIsGeneratingPreview(false);
-        }
-    }, [uploadedImage, imageMimeType, script, expressionIntensity, videoOrientation]);
-
-    const handleRevertPreview = useCallback(() => {
-        setExpressionPreview(null);
+    const handleSelectVoice = useCallback((voiceName: string) => {
+        setSelectedVoice(voiceName);
+        setPipelineStage('VOICE_SELECTED');
     }, []);
 
+    const handleGenerateFullAudio = useCallback(async () => {
+        if (!selectedVoice || !script) return;
+        setError(null);
+        setPipelineStage('AUDIO_FULL');
+        try {
+            const audio = await audioService.generateFullAudio(script, selectedVoice, styleTags);
+            setFullAudio(audio);
+            
+            setPipelineStage('AUDIO_ANALYSIS');
+            const analysis = await audioService.analyzeAudioTimings(audio.durationSec ?? 0, script);
+
+            setPipelineStage('GESTURE_PLANNING');
+            const plan = await analyzeScriptForGestures(script, analysis.segments);
+            setGesturePlan(plan);
+            
+            // Auto-trigger keyframe generation after planning
+            if (plan.length > 0) {
+                await handleGenerateKeyframes(plan);
+            } else {
+                 setPipelineStage('DONE'); // No gestures to make, ready for video
+            }
+
+        } catch (err: any) {
+            setError(err.message || "Failed to process audio and gestures.");
+            setPipelineStage('ERROR');
+        }
+    }, [script, selectedVoice, styleTags]);
+
+    const handleGenerateKeyframes = useCallback(async (plan: GestureInstruction[]) => {
+        const sourceImage = selection?.image;
+        if (!sourceImage) {
+            setError("Please select a source image before generating keyframes.");
+            setPipelineStage('ERROR');
+            return;
+        }
+        setError(null);
+        setPipelineStage('KEYFRAME_GEN');
+        
+        try {
+            const reader = new FileReader();
+            reader.readAsDataURL(sourceImage.blob);
+            await new Promise(resolve => reader.onload = resolve);
+            const base64String = (reader.result as string).split(',')[1];
+
+            for (const instruction of plan) {
+                const keyframe = await generateGestureKeyframe(base64String, sourceImage.mimeType, instruction);
+                await addGeneratedImage(keyframe.base64, `frame_at_${instruction.timeSec?.toFixed(2)}s`);
+            }
+            setPipelineStage('DONE');
+        } catch (err: any) {
+            setError(err.message || "Failed to generate keyframes.");
+            setPipelineStage('ERROR');
+        }
+    }, [selection, addGeneratedImage]);
 
     const handleGenerateVideo = useCallback(async () => {
-        if (!uploadedImage || !imageMimeType || !script) {
-            setError("Please upload an image and provide a script before generating a video.");
+        const sourceImage = selection?.image;
+        if (!sourceImage || !fullAudio || !selectedVoice) {
+            setError("A source image, script, and selected voice are required.");
             return;
         }
 
-        setIsLoading(true);
         setError(null);
-        setActiveVideoUrl(null);
+        setPipelineStage('VIDEO_START');
 
+        const pollForVideo = async (operation: any, signal: AbortSignal) => {
+            let currentOperation = operation;
+            while (!currentOperation.done) {
+                 if (signal.aborted) throw new Error("Cancelled");
+                setPipelineStage('VIDEO_RENDER');
+                await new Promise(resolve => setTimeout(resolve, 10000));
+                 if (signal.aborted) throw new Error("Cancelled");
+                currentOperation = await checkVideoGenerationStatus(currentOperation);
+            }
+            return currentOperation;
+        };
+        
         let generatedVideoUrl: string | null = null;
-        try {
-            let imageToProcess: ExpressiveImageResponse;
+        
+        videoGenerationTask.run(async (signal) => {
+             try {
+                const reader = new FileReader();
+                reader.readAsDataURL(sourceImage.blob);
+                await new Promise(resolve => reader.onload = resolve);
+                const base64String = (reader.result as string).split(',')[1];
+                
+                // For now, we pass the voice prompt, as VEO doesn't accept custom audio.
+                // The generated audio is used for timing analysis.
+                const videoOperation = await startVideoGeneration(base64String, sourceImage.mimeType, script, selectedVoice, styleTags, gesturePlan);
+                
+                if (signal.aborted) return;
+                
+                const finalOperation = await pollForVideo(videoOperation, signal);
+                
+                 if (signal.aborted) return;
+                setPipelineStage('VIDEO_DOWNLOAD');
+                const downloadLink = finalOperation.response?.generatedVideos?.[0]?.video?.uri;
+                if (!downloadLink) throw new Error("Video generation finished, but no download link was returned.");
 
-            if (expressionPreview) {
-                // Use the already generated preview to save an API call
-                imageToProcess = {
-                    base64: expressionPreview.base64,
-                    mimeType: expressionPreview.mimeType,
+                const videoBlob = await downloadVideo(downloadLink);
+                generatedVideoUrl = URL.createObjectURL(videoBlob);
+                
+                const thumbnailUrl = await generateVideoThumbnail(generatedVideoUrl);
+
+                const newHistoryItem: VideoHistoryItem = {
+                    id: crypto.randomUUID(),
+                    videoUrl: generatedVideoUrl,
+                    thumbnailUrl,
+                    script,
+                    timestamp: new Date(),
                 };
-            } else {
-                // Generate a new expressive image as part of the main flow
-                setCurrentStage('GENERATING_IMAGE');
-                const base64OnlyImage = uploadedImage.split(',')[1];
-                imageToProcess = await generateExpressiveImage(base64OnlyImage, imageMimeType, script, expressionIntensity, videoOrientation);
+                
+                await dbService.addVideoToHistory({ ...newHistoryItem, videoBlob });
+
+                setVideoHistory(prevHistory => [newHistoryItem, ...prevHistory]);
+                setActiveVideoUrl(generatedVideoUrl);
+                setPipelineStage('DONE');
+                generatedVideoUrl = null; // Prevent revocation in catch block
+
+            } catch (err: any) {
+                if (err.message === 'Cancelled') {
+                    setPipelineStage('CANCELED');
+                } else {
+                    console.error(err);
+                    setError(err.message || "An unknown error occurred during video generation.");
+                    setPipelineStage('ERROR');
+                }
+                if (generatedVideoUrl) URL.revokeObjectURL(generatedVideoUrl);
             }
-            
-            setCurrentStage('STARTING_VIDEO');
-            const selectedVoiceConfig = VOICES.find(v => v.name === voiceStyle);
-            if (!selectedVoiceConfig) {
-                throw new Error(`Internal configuration error: Voice style "${voiceStyle}" not found.`);
-            }
-            const finalVoicePrompt = selectedVoiceConfig.promptDescriptor;
-
-            const videoOperation = await startVideoGeneration(imageToProcess.base64, imageToProcess.mimeType, script, finalVoicePrompt, videoOrientation);
-
-            const finalOperation = await pollForVideo(videoOperation);
-            
-            setCurrentStage('DOWNLOADING_VIDEO');
-            const downloadLink = finalOperation.response?.generatedVideos?.[0]?.video?.uri;
-
-            if (!downloadLink) {
-                throw new Error("Video generation finished, but no download link was returned from the AI. This is a rare issue. Suggestion: Please try generating again.");
-            }
-
-            const videoBlob = await downloadVideo(downloadLink);
-            generatedVideoUrl = URL.createObjectURL(videoBlob);
-            
-            setCurrentStage('CREATING_THUMBNAIL');
-            const thumbnailUrl = await generateVideoThumbnail(generatedVideoUrl).catch(err => {
-                console.error("Thumbnail generation failed:", err);
-                throw new Error("The video was created, but there was an issue preparing it for display. Suggestion: Please try generating again.");
-            });
-
-
-            const newHistoryItem: VideoHistoryItem = {
-                id: crypto.randomUUID(),
-                videoUrl: generatedVideoUrl,
-                thumbnailUrl,
-                script,
-                timestamp: new Date(),
-            };
-            
-            await dbService.addVideoToHistory({ ...newHistoryItem, videoBlob });
-
-            setVideoHistory(prevHistory => [newHistoryItem, ...prevHistory]);
-            setActiveVideoUrl(generatedVideoUrl);
-            
-            // The URL is now managed by React state; prevent it from being revoked in the catch block.
-            generatedVideoUrl = null;
-
-        } catch (err: any) {
-            console.error(err);
-            // If a temporary video URL was created but an error occurred before it was stored, revoke it.
-            if (generatedVideoUrl) {
-                URL.revokeObjectURL(generatedVideoUrl);
-            }
-            setError(err.message || "An unknown error occurred during video generation.");
-        } finally {
-            setIsLoading(false);
-            setCurrentStage('');
-        }
-    }, [uploadedImage, imageMimeType, script, expressionIntensity, pollForVideo, voiceStyle, videoOrientation, expressionPreview]);
+        });
+    }, [selection, script, fullAudio, selectedVoice, styleTags, gesturePlan, videoGenerationTask]);
+    
+    const handleCancel = () => {
+        videoGenerationTask.cancel();
+    };
 
     const handleDeleteVideo = useCallback(async (id: string) => {
         try {
@@ -275,7 +271,7 @@ const App: React.FC = () => {
             setVideoHistory(prevHistory => {
                 const itemToDelete = prevHistory.find(item => item.id === id);
                 if (itemToDelete) {
-                    URL.revokeObjectURL(itemToDelete.videoUrl); // Clean up memory
+                    URL.revokeObjectURL(itemToDelete.videoUrl);
                     if (activeVideoUrl === itemToDelete.videoUrl) {
                         const nextHistory = prevHistory.filter(item => item.id !== id);
                         setActiveVideoUrl(nextHistory.length > 0 ? nextHistory[0].videoUrl : null);
@@ -291,7 +287,6 @@ const App: React.FC = () => {
     const handleClearHistory = useCallback(async () => {
         try {
             await dbService.clearHistory();
-            // Revoke all current blob URLs before clearing the state
             videoHistory.forEach(item => URL.revokeObjectURL(item.videoUrl));
             setVideoHistory([]);
             setActiveVideoUrl(null);
@@ -300,53 +295,56 @@ const App: React.FC = () => {
         }
     }, [videoHistory]);
 
+    const isBusy = !['IDLE', 'DONE', 'CANCELED', 'ERROR', 'VOICE_SELECTED'].includes(pipelineStage);
+
     return (
-        <div className="min-h-screen bg-gray-900 text-gray-200 font-sans p-4 sm:p-6 lg:p-8">
-            <div className="max-w-screen-2xl mx-auto">
+        <div className="min-h-screen bg-black text-neutral-300 font-sans p-4 sm:p-6 lg:p-8 flex flex-col">
+            {lightboxImage && <Lightbox imageAsset={lightboxImage} onClose={() => setLightboxImage(null)} />}
+            <div className="max-w-screen-2xl mx-auto w-full">
                 <Header />
-                <main className="mt-8 grid grid-cols-1 lg:grid-cols-7 gap-8">
-                    {/* --- Column 1: Image Uploader --- */}
-                    <div className="lg:col-span-2">
+                <main className="mt-8 grid grid-cols-1 lg:grid-cols-10 gap-6">
+                    <div className="lg:col-span-3">
                         <ImageUploader 
-                            onImageUpload={handleImageUpload} 
-                            uploadedImagePreview={uploadedImage}
-                            expressionPreviewImage={expressionPreview?.dataUrl ?? null}
-                            onRevertPreview={handleRevertPreview}
+                            images={images}
+                            selection={selection}
+                            onSelect={select}
+                            onUpload={addUploadedImage}
+                            onClearAll={removeAllImages}
+                            onEnlarge={setLightboxImage}
                          />
                     </div>
-                    {/* --- Column 2: Control Panel --- */}
-                    <div className="lg:col-span-2">
+                    <div className="lg:col-span-3">
                         <ControlPanel
                             script={script}
                             setScript={setScript}
-                            voiceStyle={voiceStyle}
-                            setVoiceStyle={setVoiceStyle}
-                            expressionIntensity={expressionIntensity}
-                            setExpressionIntensity={setExpressionIntensity}
-                            videoOrientation={videoOrientation}
-                            setVideoOrientation={setVideoOrientation}
-                            onGenerate={handleGenerateVideo}
-                            isLoading={isLoading}
-                            isReady={!!uploadedImage}
-                            onEnhanceScript={handleEnhanceScript}
-                            isEnhancingScript={isEnhancingScript}
-                            onGeneratePreview={handleGeneratePreview}
-                            isGeneratingPreview={isGeneratingPreview}
+                            pipelineStage={pipelineStage}
+                            onGeneratePreviews={handleGeneratePreviews}
+                            voicePreviews={voicePreviews}
+                            onSelectVoice={handleSelectVoice}
+                            selectedVoice={selectedVoice}
+                            styleTags={styleTags}
+                            setStyleTags={setStyleTags}
+                            onGenerateFullAudio={handleGenerateFullAudio}
+                            fullAudio={fullAudio}
+                            onGenerateVideo={handleGenerateVideo}
+                            onCancel={handleCancel}
+                            isBusy={isBusy}
                         />
                     </div>
-                    {/* --- Column 3: Video Output & History --- */}
-                    <div className="lg:col-span-3 flex flex-col gap-8">
-                        <div className="bg-gray-800 rounded-2xl shadow-lg p-6 flex items-center justify-center flex-grow min-h-[60vh]">
-                            {isLoading ? (
-                                <Loader currentStage={currentStage} />
+                    <div className="lg:col-span-4 flex flex-col gap-6">
+                        <div className="bg-neutral-950 border border-neutral-900 rounded-lg flex items-center justify-center flex-grow min-h-[60vh]">
+                            {isBusy && pipelineStage.startsWith('VIDEO') ? (
+                                <Loader currentStage={pipelineStage} />
                             ) : error ? (
                                 <ErrorDisplay message={error} />
                             ) : activeVideoUrl ? (
                                 <VideoPlayer videoUrl={activeVideoUrl} />
+                            ) : fullAudio && fullAudio.objectUrl && ['DONE', 'CANCELED', 'ERROR', 'VOICE_SELECTED'].includes(pipelineStage) ? (
+                                <AudioPlayer audioUrl={fullAudio.objectUrl} />
                             ) : (
-                                <div className="text-center text-gray-400">
+                                <div className="text-center text-neutral-600">
                                     <p className="text-lg">Your generated video will appear here.</p>
-                                    <p className="text-sm mt-2">Upload an image and provide a script to get started.</p>
+
                                 </div>
                             )}
                         </div>
@@ -360,6 +358,12 @@ const App: React.FC = () => {
                     </div>
                 </main>
             </div>
+            <AssetTray 
+                images={images}
+                selection={selection}
+                onSelect={select}
+                onEnlarge={setLightboxImage}
+            />
         </div>
     );
 };

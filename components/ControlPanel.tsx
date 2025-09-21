@@ -1,307 +1,178 @@
-import React, { useState, useEffect } from 'react';
-import { ExpressionIntensity, VoiceOption, VideoOrientation } from '../types';
+import React from 'react';
+import { PipelineStage, AudioAsset } from '../types';
 import { VOICES } from '../constants';
 
 interface ControlPanelProps {
     script: string;
     setScript: (script: string) => void;
-    voiceStyle: string;
-    setVoiceStyle: (name: string) => void;
-    expressionIntensity: ExpressionIntensity;
-    setExpressionIntensity: (intensity: ExpressionIntensity) => void;
-    videoOrientation: VideoOrientation;
-    setVideoOrientation: (orientation: VideoOrientation) => void;
-    onGenerate: () => void;
-    isLoading: boolean;
-    isReady: boolean;
-    onEnhanceScript: () => void;
-    isEnhancingScript: boolean;
-    onGeneratePreview: () => void;
-    isGeneratingPreview: boolean;
+    pipelineStage: PipelineStage;
+    onGeneratePreviews: () => void;
+    voicePreviews: AudioAsset[];
+    onSelectVoice: (voiceName: string) => void;
+    selectedVoice: string | null;
+    styleTags: string[];
+    setStyleTags: (tags: string[]) => void;
+    onGenerateFullAudio: () => void;
+    fullAudio: AudioAsset | null;
+    onGenerateVideo: () => void;
+    onCancel: () => void;
+    isBusy: boolean;
 }
 
-const Label: React.FC<{ htmlFor?: string, children: React.ReactNode }> = ({ htmlFor, children }) => (
-    <label htmlFor={htmlFor} className="block text-sm font-medium text-gray-300 mb-2">{children}</label>
+const Label: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+    <label className="block text-xs uppercase tracking-wider font-semibold text-neutral-500 mb-2">{children}</label>
 );
 
-const Select: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = (props) => (
-    <select {...props} className={`w-full p-3 bg-gray-700 border border-gray-600 rounded-md focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition disabled:bg-gray-700/50 disabled:cursor-not-allowed ${props.className}`}>
-        {props.children}
-    </select>
+const Step: React.FC<{ number: number, title: string, children: React.ReactNode, isActive: boolean }> = ({ number, title, children, isActive }) => (
+     <div className={`border-l-2 ${isActive ? 'border-neutral-500' : 'border-neutral-800'} pl-4 py-2 transition-all`}>
+        <h3 className={`font-bold text-md ${isActive ? 'text-neutral-200' : 'text-neutral-600'}`}>
+            {number}. {title}
+        </h3>
+        <div className={`mt-3 ${!isActive ? 'opacity-50' : ''}`}>
+            {children}
+        </div>
+    </div>
 );
 
-const PlayIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" /></svg>;
-const StopIcon = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1zm4 0a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" /></svg>;
-
-const InfoIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
-        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-    </svg>
-);
-
+const SUGGESTED_TAGS = ['Confident', 'Warm', 'Authoritative', 'Friendly', 'Calm', 'Energetic'];
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
-    script,
-    setScript,
-    voiceStyle,
-    setVoiceStyle,
-    expressionIntensity,
-    setExpressionIntensity,
-    videoOrientation,
-    setVideoOrientation,
-    onGenerate,
-    isLoading,
-    isReady,
-    onEnhanceScript,
-    isEnhancingScript,
-    onGeneratePreview,
-    isGeneratingPreview
+    script, setScript, pipelineStage, onGeneratePreviews, voicePreviews, onSelectVoice,
+    selectedVoice, styleTags, setStyleTags, onGenerateFullAudio, fullAudio, onGenerateVideo, onCancel, isBusy
 }) => {
-    const [systemVoices, setSystemVoices] = useState<SpeechSynthesisVoice[]>([]);
-    const [speakingVoiceName, setSpeakingVoiceName] = useState<string | null>(null);
-    const [estimatedCost, setEstimatedCost] = useState<string>('0.00');
+    
+    const isLoadingPreviews = pipelineStage === 'VOICE_PREVIEWS';
+    const isLoadingFullAudio = ['AUDIO_FULL', 'AUDIO_ANALYSIS', 'GESTURE_PLANNING', 'KEYFRAME_GEN'].includes(pipelineStage);
+    const isGeneratingVideo = ['VIDEO_START', 'VIDEO_RENDER', 'VIDEO_DOWNLOAD'].includes(pipelineStage);
+    const isDone = pipelineStage === 'DONE' || pipelineStage === 'VOICE_SELECTED'; // Allow generation right after voice selection if no gestures are needed
 
-    // Cost per character for estimation. This is a hypothetical value.
-    const COST_PER_CHARACTER = 0.0005;
-
-    useEffect(() => {
-        const calculateCost = () => {
-            if (!script) {
-                setEstimatedCost('0.00');
-                return;
-            }
-            const cost = script.length * COST_PER_CHARACTER;
-            setEstimatedCost(cost.toFixed(2));
-        };
-
-        // Debounce calculation to avoid updating on every keystroke
-        const handler = setTimeout(calculateCost, 300);
-        return () => clearTimeout(handler);
-
-    }, [script]);
-
-    useEffect(() => {
-        const loadVoices = () => {
-            const voices = window.speechSynthesis.getVoices();
-            if (voices.length > 0) {
-                setSystemVoices(voices);
-            }
-        };
-        // Voices load asynchronously.
-        loadVoices();
-        window.speechSynthesis.onvoiceschanged = loadVoices;
-
-        // Cleanup on unmount
-        return () => {
-            window.speechSynthesis.onvoiceschanged = null;
-            window.speechSynthesis.cancel();
-        };
-    }, []);
-
-    const handleAudition = (voice: VoiceOption) => {
-        const { name: voiceName, displayName } = voice;
-        const isCurrentlySpeaking = speakingVoiceName === voiceName;
-        
-        // Always stop any current speech first.
-        window.speechSynthesis.cancel();
-
-        // If the clicked voice was the one speaking, we just stop it.
-        if (isCurrentlySpeaking) {
-            setSpeakingVoiceName(null);
-            return;
+    const handleAddTag = (tag: string) => {
+        const trimmed = tag.trim();
+        if (trimmed && !styleTags.includes(trimmed)) {
+            setStyleTags([...styleTags, trimmed]);
         }
-
-        // Otherwise, we start a new speech.
-        const textToSpeak = (script.split(/[.!?]/)[0] || "Hello, this is a voice preview.").trim();
-        if (!textToSpeak) return;
-
-        const utterance = new SpeechSynthesisUtterance(textToSpeak);
-        const systemVoice = systemVoices.find(v => v.name === voiceName);
-
-        if (!systemVoice) {
-            alert(`A preview voice for "${displayName}" is not available on your browser. The final video will still be generated with the correct high-quality voice.`);
-            return;
-        }
-
-        utterance.voice = systemVoice;
-
-        utterance.onstart = () => {
-            setSpeakingVoiceName(voiceName);
-        };
-
-        utterance.onend = () => {
-            setSpeakingVoiceName(null);
-        };
-        
-        utterance.onerror = (event) => {
-            console.error('SpeechSynthesis Error:', event.error);
-            setSpeakingVoiceName(null);
-        };
-
-        window.speechSynthesis.speak(utterance);
     };
 
-    const isBusy = isLoading || isEnhancingScript || isGeneratingPreview;
+    const handleRemoveTag = (tagToRemove: string) => {
+        setStyleTags(styleTags.filter(tag => tag !== tagToRemove));
+    };
+
+    const handleTagInput = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const input = e.target as HTMLInputElement;
+            handleAddTag(input.value);
+            input.value = '';
+        }
+    };
+
+    const finalStepActive = fullAudio && (pipelineStage === 'DONE' || pipelineStage === 'VOICE_SELECTED' || isGeneratingVideo)
 
     return (
-        <div className="bg-gray-800 rounded-2xl shadow-lg p-6 flex flex-col gap-6 h-full">
-            <div>
-                 <h2 className="text-xl font-bold text-cyan-400 mb-4">2. Configure Script & Video</h2>
-            </div>
-            <div>
-                 <div className="flex justify-between items-center mb-2">
-                    <Label htmlFor="script">Script</Label>
-                    <button
-                        onClick={onEnhanceScript}
-                        disabled={isBusy || !script}
-                        className="text-xs bg-teal-600/50 text-teal-200 font-semibold py-1 px-3 rounded-full hover:bg-teal-600/80 transition-colors disabled:bg-gray-600 disabled:text-gray-400 disabled:cursor-not-allowed flex items-center gap-1"
-                        title="Rewrite script for clarity and impact"
-                    >
-                        {isEnhancingScript ? (
-                            <>
-                               <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                </svg>
-                                Enhancing...
-                            </>
-                        ) : (
-                           "✨ Enhance with AI"
-                        )}
-                    </button>
-                </div>
+        <div className="bg-neutral-950 border border-neutral-900 rounded-lg p-5 flex flex-col gap-5 h-full">
+            <h2 className="text-lg font-bold text-neutral-200">2. CONFIGURE & GENERATE</h2>
+            
+            <Step number={1} title="Write Script" isActive={true}>
                 <textarea
-                    id="script"
                     value={script}
                     onChange={(e) => setScript(e.target.value)}
-                    rows={6}
-                    className="w-full p-3 bg-gray-700 border border-gray-600 rounded-md focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition text-gray-200"
+                    rows={4}
+                    className="w-full p-2.5 bg-neutral-900 border border-neutral-800 rounded-md focus:ring-1 focus:ring-neutral-500 transition text-neutral-300 text-sm"
                     placeholder="Enter the text for the video..."
                     disabled={isBusy}
                 />
-            </div>
-            
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                 <div>
-                    <Label htmlFor="expression-intensity">Expression Intensity</Label>
-                     <div className="flex items-center gap-2">
-                        <Select
-                            id="expression-intensity"
-                            value={expressionIntensity}
-                            onChange={(e) => setExpressionIntensity(e.target.value as ExpressionIntensity)}
-                            className="flex-grow"
-                            disabled={isBusy}
-                        >
-                            {Object.values(ExpressionIntensity).map(intensity => <option key={intensity} value={intensity}>{intensity}</option>)}
-                        </Select>
-                         <button
-                            onClick={onGeneratePreview}
-                            disabled={isBusy || !isReady}
-                            className="p-3 bg-teal-600/50 text-teal-200 rounded-md hover:bg-teal-600/80 transition-colors disabled:bg-gray-600 disabled:text-gray-400 disabled:cursor-not-allowed flex items-center justify-center"
-                            title="Generate a still image preview of the expression"
-                        >
-                            {isGeneratingPreview ? (
-                                <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                </svg>
-                            ) : (
-                               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z" /><path fillRule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.022 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clipRule="evenodd" /></svg>
-                            )}
-                        </button>
-                    </div>
-                </div>
-                <div>
-                    <Label htmlFor="video-orientation">Video Orientation</Label>
-                    <Select
-                        id="video-orientation"
-                        value={videoOrientation}
-                        onChange={(e) => setVideoOrientation(e.target.value as VideoOrientation)}
-                        disabled={isBusy}
-                    >
-                        {Object.values(VideoOrientation).map(orientation => <option key={orientation} value={orientation}>{orientation}</option>)}
-                    </Select>
-                </div>
-            </div>
+            </Step>
 
-            <div>
-                 <div className="flex items-center gap-2 mb-3">
-                    <Label>Voice Style</Label>
-                    <div className="group relative flex items-center">
-                        <InfoIcon />
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-2 bg-gray-900 text-white text-xs text-center rounded-md opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                            Audition uses your browser's text-to-speech. The final video will feature a higher-quality AI-generated voice.
-                            <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-x-4 border-x-transparent border-t-4 border-t-gray-900"></div>
-                        </div>
-                    </div>
-                </div>
-                <div className="space-y-2">
-                    {VOICES.map((voice) => {
-                        const isPlaying = speakingVoiceName === voice.name;
-                        return (
-                            <div key={voice.name} className="flex items-center justify-between bg-gray-700/50 p-2 rounded-md">
-                                <label htmlFor={`voice-${voice.name}`} className="flex items-center gap-3 cursor-pointer w-full">
-                                    <input
-                                        type="radio"
-                                        id={`voice-${voice.name}`}
-                                        name="voice-style"
-                                        value={voice.name}
-                                        checked={voiceStyle === voice.name}
-                                        onChange={(e) => setVoiceStyle(e.target.value)}
-                                        className="form-radio h-4 w-4 text-cyan-500 bg-gray-800 border-gray-600 focus:ring-cyan-600"
-                                        disabled={isBusy}
-                                    />
-                                    <span className="text-gray-200">{voice.displayName}</span>
-                                </label>
-                                 <button 
-                                    onClick={() => handleAudition(voice)} 
-                                    title={isPlaying ? "Stop Audition" : "Audition Voice Sample"} 
-                                    className={`p-2 rounded-full transition-colors ${isPlaying ? 'bg-red-600 hover:bg-red-500' : 'bg-teal-600 hover:bg-teal-500'} text-white`}
-                                    disabled={systemVoices.length === 0 || isBusy}
-                                >
-                                    {isPlaying ? <StopIcon /> : <PlayIcon />}
+            <Step number={2} title="Choose Voice" isActive={!!script}>
+                {!selectedVoice && (
+                    <button onClick={onGeneratePreviews} disabled={!script || isBusy} className="w-full btn-secondary">
+                        {isLoadingPreviews ? "Generating..." : "Generate Voice Previews"}
+                    </button>
+                )}
+                <div className="space-y-2 mt-2">
+                    {voicePreviews.map(preview => (
+                        <div key={preview.id} className={`p-2 rounded-md transition-all duration-300 transform ${selectedVoice === preview.voiceName ? 'bg-neutral-700 scale-105' : selectedVoice ? 'bg-neutral-800/50 opacity-60 hover:opacity-100' : 'bg-neutral-800/50'}`}>
+                            <div className="flex items-center justify-between">
+                                <span className="text-sm text-neutral-300">{VOICES.find(v => v.name === preview.voiceName)?.displayName}</span>
+                                <button onClick={() => onSelectVoice(preview.voiceName)} disabled={isBusy} className="text-xs bg-neutral-600 hover:bg-neutral-500 px-2 py-1 rounded-md">
+                                    {selectedVoice === preview.voiceName ? 'Selected' : 'Select'}
                                 </button>
                             </div>
-                        );
-                    })}
-                </div>
-            </div>
-            
-            <div className="mt-auto">
-                <div className="text-center text-sm text-gray-400 mb-4">
-                    <div className="flex items-center justify-center gap-2">
-                        <span>Estimated Generation Cost: <strong className="text-yellow-400">${estimatedCost}</strong></span>
-                        <div className="group relative flex items-center">
-                            <InfoIcon />
-                            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 p-2 bg-gray-900 text-white text-xs text-center rounded-md opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                                Cost is an estimate based on script length. Final price may vary slightly.
-                                <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-x-4 border-x-transparent border-t-4 border-t-gray-900"></div>
-                            </div>
+                            <audio src={preview.objectUrl} controls className="w-full h-8 mt-2" />
                         </div>
-                    </div>
+                    ))}
                 </div>
+            </Step>
+            
+            <Step number={3} title="Generate Audio & Gestures" isActive={!!selectedVoice}>
+                {!!selectedVoice && (
+                    <>
+                    {!fullAudio && (
+                        <div className="space-y-4">
+                            <div>
+                                <Label>Voice Style (Optional)</Label>
+                                <div className="flex flex-wrap gap-2 mb-2 p-2 bg-neutral-900 border border-neutral-800 rounded-md min-h-[40px] items-center">
+                                    {styleTags.map(tag => (
+                                        <span key={tag} className="flex items-center bg-neutral-700 text-neutral-200 text-xs font-medium px-2.5 py-1 rounded-full">
+                                            {tag}
+                                            <button onClick={() => handleRemoveTag(tag)} className="ml-1.5 text-neutral-400 hover:text-white">
+                                                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd"></path></svg>
+                                            </button>
+                                        </span>
+                                    ))}
+                                    <input
+                                        type="text"
+                                        onKeyDown={handleTagInput}
+                                        placeholder={styleTags.length === 0 ? "e.g., Confident..." : "+ add tag"}
+                                        className="flex-grow bg-transparent focus:outline-none text-sm p-1"
+                                        disabled={isBusy}
+                                    />
+                                </div>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {SUGGESTED_TAGS.map(tag => (
+                                        <button key={tag} onClick={() => handleAddTag(tag)} disabled={isBusy || styleTags.includes(tag)}
+                                            className="text-xs bg-neutral-800 px-2 py-1 rounded-md hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed transition">
+                                            + {tag}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                             <button onClick={onGenerateFullAudio} disabled={isBusy} className="w-full btn-secondary">
+                                {isLoadingFullAudio ? "Processing..." : "Generate Full Audio & Gestures"}
+                            </button>
+                        </div>
+                    )}
 
-                <div>
-                    <button
-                        onClick={onGenerate}
-                        disabled={isBusy || !isReady}
-                        className="w-full bg-cyan-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-cyan-500 transition-all duration-300 disabled:bg-gray-600 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                    >
-                        {isLoading ? (
-                            <>
-                               <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                </svg>
-                                Generating...
-                            </>
-                        ) : (
-                           "✨ Generate Video"
-                        )}
-                    </button>
-                     {!isReady && <p className="text-xs text-center text-yellow-400 mt-2">Please upload an image to enable generation.</p>}
-                </div>
+                    {fullAudio && (
+                         <div className="p-3 rounded-md bg-green-950/40 border border-green-800 flex items-center justify-center gap-2 transition-all">
+                             <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor">
+                                 <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                             </svg>
+                             <p className="text-sm text-green-400 font-medium">Audio & Gestures Ready</p>
+                         </div>
+                    )}
+                    </>
+                )}
+            </Step>
+
+            <div className="mt-auto pt-4">
+                <Step number={4} title="Generate Video" isActive={finalStepActive}>
+                     {isGeneratingVideo ? (
+                        <button onClick={onCancel} className="w-full btn-danger">
+                           Cancel Generation
+                        </button>
+                     ) : (
+                        <button onClick={onGenerateVideo} disabled={!finalStepActive || isBusy} className="w-full btn-primary">
+                            Generate Video
+                        </button>
+                     )}
+                </Step>
             </div>
+             <style>{`
+                .btn-primary { @apply w-full bg-neutral-100 text-black font-bold py-3 px-4 rounded-lg hover:bg-white transition-all duration-300 disabled:bg-neutral-800 disabled:text-neutral-500 disabled:cursor-not-allowed; }
+                .btn-secondary { @apply w-full bg-neutral-800 text-neutral-300 font-bold py-2 px-4 rounded-lg hover:bg-neutral-700 transition-all duration-300 disabled:bg-neutral-800/50 disabled:text-neutral-500 disabled:cursor-not-allowed; }
+                .btn-danger { @apply w-full bg-red-900/80 text-white font-bold py-3 px-4 rounded-lg hover:bg-red-800 transition-all duration-300; }
+            `}</style>
         </div>
     );
 };
